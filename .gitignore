@@ -1,0 +1,5 @@
+.aider*
+.env
+avr/main
+avr/main.hex
+avr/test
