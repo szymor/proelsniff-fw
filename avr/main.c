@@ -22,13 +22,6 @@ union Num
 #define CYCLE_SIZE		(256)
 #define CYCLE_MASK		(0xff)
 
-#define GREEN_PORT		(PORTB)
-#define GREEN_PIN		(0)
-#define RED_PORT		(PORTB)
-#define RED_PIN			(1)
-#define PDCTRL_PORT		(PORTB)
-#define PDCTRL_PIN		(2)
-
 // start, mod 8 prescaler (2.304 MHz)
 #define timer_start() do { TCCR1B = _BV(CS11); } while (0);
 #define timer_stop() do { TCCR1B = 0; } while (0);
@@ -77,27 +70,29 @@ uint8_t get_my_flatno(void)
 	return (PIND & 0xf0) | ((PINC >> 2) & 0x0f);
 }
 
-void esp_power_up(void)
+void gpio_init(void)
 {
-	RED_PORT &= ~_BV(RED_PIN);
-	PDCTRL_PORT |= _BV(PDCTRL_PIN);
-	_delay_ms(5000);
-	_delay_ms(5000);
-	_delay_ms(5000);
-}
+	// lower 4 flat bits as pull-ups
+	PORTC = _BV(PINC2) | _BV(PINC3) | _BV(PINC4) | _BV(PINC5);
+	// INT0, INT1 and higher 4 flat bits as pull-ups
+	PORTD = _BV(PIND2) | _BV(PIND3) | _BV(PIND4) | _BV(PIND5) | _BV(PIND6) | _BV(PIND7);
 
-void esp_power_down(void)
-{
-	_delay_ms(5000);
-	PDCTRL_PORT &= ~_BV(PDCTRL_PIN);
-	RED_PORT |= _BV(RED_PIN);
+	// pd control, green and red leds are output
+	// esp gpio0 and esp gpio2 are input
+	PORTB = _BV(RED_PIN);
+	DDRB = _BV(GREEN_PIN) | _BV(RED_PIN) | _BV(PDCTRL_PIN);
 }
 
 void main(void)
 {
+	gpio_init();
 	adc_init();
 	serial_init();
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+
+	// test run of esp8266
+	esp_power_up();
+	esp_power_down();
 
 	// enable interrupts
 	sei();
@@ -108,10 +103,6 @@ void main(void)
 	TCCR1A = 0x00;
 	timer_start();
 
-	// lower 4 flat bits as pull-ups
-	PORTC = _BV(PINC2) | _BV(PINC3) | _BV(PINC4) | _BV(PINC5);
-	// INT0, INT1 and higher 4 flat bits as pull-ups
-	PORTD = _BV(PIND2) | _BV(PIND3) | _BV(PIND4) | _BV(PIND5) | _BV(PIND6) | _BV(PIND7);
 	// configure INT0 as falling edge, INT1 as rising edge
 	EICRA = _BV(ISC01) | _BV(ISC11) | _BV(ISC10);
 	// enable external interrupt
@@ -120,23 +111,47 @@ void main(void)
 	fsm_set_cb(flat_callback);
 	fsm_reset();
 
-	// pd control (off), green and red leds are output
-	PORTB = 0x03;
-	DDRB = 0x07;
-
 	while (1)
 	{
 		// sleep if idle for ~16s
 		if (count >= 0x0200)
 		{
-			GREEN_PORT |= _BV(GREEN_PIN);
+#ifdef DEBUG
+			// send debug info before sleep
+			if (fsm_get_debug_property(DP_STATE) != STATE_IDLE)
+			{
+				esp_power_up();
+
+				const char state2string[][8] = {
+					"idle",
+					"rstart",
+					"rend",
+					"fstart",
+					"fend",
+					"rtstart",
+					"rtend"
+				};
+				// publish debug info
+				printf("m:publish(topic..\"debug/last_state\", \"%s\", 1, 0)\r\n", state2string[fsm_get_debug_property(DP_STATE)]);
+				printf("m:publish(topic..\"debug/reset\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_RESET_PERIOD));
+				printf("m:publish(topic..\"debug/end\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_END_PERIOD));
+				printf("m:publish(topic..\"debug/flat_low\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_FLAT_LOW_PERIOD));
+				printf("m:publish(topic..\"debug/flat_high\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_FLAT_HIGH_PERIOD));
+
+				// publish the idle voltage
+				printf("m:publish(topic..\"idle_voltage\", %d, 1, 0)\r\n", ((uint32_t)adc_read() * 12100) >> 10);
+
+				esp_power_down();
+			}
+#endif
+			PORTB |= _BV(GREEN_PIN);
 			count = 0;
 			fsm_reset();
 			sleep_mode();
 		}
 
 		// green is on if not idle
-		GREEN_PORT &= ~_BV(GREEN_PIN);
+		PORTB &= ~_BV(GREEN_PIN);
 
 		// process the cyclic buffer of events
 		while (cbegin != cend)
@@ -145,39 +160,12 @@ void main(void)
 			cycle_forward(cbegin);
 		}
 
-		// send after ~4s of bus inactivity
-		if ((flat_to_send || fsm_get_debug_property(DP_STATE) != STATE_IDLE) && (count >= 0x0080))
+		if (flat_to_send)
 		{
 			esp_power_up();
 
-			if (flat_to_send)
-			{
-				printf("m:publish(topic..\"flat\", %d, 2, 0)\r\n", flat_to_send);
-				flat_to_send = 0;
-			}
-
-#ifdef DEBUG
-			const char state2string[][8] = {
-				"idle",
-				"rstart",
-				"rend",
-				"fstart",
-				"fend",
-				"rtstart",
-				"rtend"
-			};
-			// publish debug info
-			printf("m:publish(topic..\"debug/last_state\", \"%s\", 2, 0)\r\n", state2string[fsm_get_debug_property(DP_STATE)]);
-			printf("m:publish(topic..\"debug/reset\", %lu, 2, 0)\r\n", fsm_get_debug_property(DP_RESET_PERIOD));
-			printf("m:publish(topic..\"debug/end\", %lu, 2, 0)\r\n", fsm_get_debug_property(DP_END_PERIOD));
-			printf("m:publish(topic..\"debug/flat_low\", %lu, 2, 0)\r\n", fsm_get_debug_property(DP_FLAT_LOW_PERIOD));
-			printf("m:publish(topic..\"debug/flat_high\", %lu, 2, 0)\r\n", fsm_get_debug_property(DP_FLAT_HIGH_PERIOD));
-#endif
-
-			// publish the idle voltage
-			printf("m:publish(topic..\"idle_voltage\", %d, 2, 0)\r\n", ((uint32_t)adc_read() * 12100) >> 10);
-			// publish the flat number set on jumpers
-			printf("m:publish(topic..\"my_flat\", %d, 2, 0)\r\n", get_my_flatno());
+			printf("m:publish(topic..\"flat\", %d, 1, 0)\r\n", flat_to_send);
+			flat_to_send = 0;
 
 			esp_power_down();
 		}
