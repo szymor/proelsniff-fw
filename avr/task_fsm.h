@@ -4,6 +4,8 @@
 #define FSM_CYCLE_SIZE		(256)
 #define FSM_CYCLE_MASK		(0xff)
 
+#define FSM_CYCLE_EMPTY		(fsm_cbegin == fsm_cend)
+
 union Num
 {
 	uint32_t v32;

@@ -19,8 +19,8 @@ uint16_t adc_read(void);
 void gpio_init(void);
 uint8_t gpio_get_my_flatno(void);
 
-void esp_power_up(void);
-void esp_power_down(void);
+uint8_t esp_power_up(int16_t timeout_ms);
+uint8_t esp_power_down(int16_t timeout_ms);
 
 void task_fsm(void);
 void task_flat(void);

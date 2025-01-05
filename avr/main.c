@@ -22,10 +22,8 @@ void main(void)
 	serial_init();
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 
-	// test run of esp8266, allows to set Wi-fi if not configured
-	_delay_ms(1000);
-	esp_power_up();
-	esp_power_down();
+	task_fsm_init();
+	task_comm_init();
 
 	// enable interrupts
 	sei();
@@ -41,43 +39,20 @@ void main(void)
 	// enable external interrupt
 	EIMSK = _BV(INT0) | _BV(INT1);
 
-	task_fsm_init();
-	task_comm_init();
-
 	while (1)
 	{
-		// sleep if idle for ~16s
-		if (t1ovf_count >= 0x0200)
+		if (!flat_send_debug &&
+			fsm_get_debug_property(DP_STATE) != STATE_IDLE &&
+			t1ovf_count >= 0x0080 /* ~4 sec */)
 		{
-#ifdef DEBUG
-			// send debug info before sleep
-			if (fsm_get_debug_property(DP_STATE) != STATE_IDLE)
-			{
-				esp_power_up();
+			flat_send_debug = 1;
+		}
 
-				const char state2string[][8] = {
-					"idle",
-					"rstart",
-					"rend",
-					"fstart",
-					"fend",
-					"rtstart",
-					"rtend"
-				};
-				// publish debug info
-				printf("m:publish(topic..\"debug/last_state\", \"%s\", 1, 0)\r\n", state2string[fsm_get_debug_property(DP_STATE)]);
-				printf("m:publish(topic..\"debug/reset\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_RESET_PERIOD));
-				printf("m:publish(topic..\"debug/end\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_END_PERIOD));
-				printf("m:publish(topic..\"debug/flat_low\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_FLAT_LOW_PERIOD));
-				printf("m:publish(topic..\"debug/flat_high\", %lu, 1, 0)\r\n", fsm_get_debug_property(DP_FLAT_HIGH_PERIOD));
-
-				// publish the idle voltage
-				printf("m:publish(topic..\"idle_voltage\", %d, 1, 0)\r\n", ((uint32_t)adc_read() * 12100) >> 10);
-
-				esp_power_down();
-			}
-#endif
+		if (FSM_CYCLE_EMPTY && FLAT_CYCLE_EMPTY && !flat_send_debug && t1ovf_count >= 0x0180 /* ~12 sec */)
+		{
+			// green off
 			PORTB |= _BV(GREEN_PIN);
+
 			t1ovf_count = 0;
 			fsm_reset();
 			sleep_mode();
