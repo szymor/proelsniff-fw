@@ -17,6 +17,7 @@ $(PROJECT_TEST): test.c fsm.c
 
 $(PROJECT): main.c fsm.c gpio.c serial.c adc.c esp.c task_fsm.c task_comm.c
 	avr-gcc -o $@ -mmcu=$(TARGET) -O2 -DDEBUG -DF_CPU=18432000UL $^
+	avr-size $(PROJECT)
 
 %.hex: %
 	avr-objcopy -F elf32-avr $< $@
